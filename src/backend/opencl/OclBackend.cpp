@@ -1,12 +1,6 @@
 /* XMRig
- * Copyright 2010      Jeff Garzik <jgarzik@pobox.com>
- * Copyright 2012-2014 pooler      <pooler@litecoinpool.org>
- * Copyright 2014      Lucas Jones <https://github.com/lucasjones>
- * Copyright 2014-2016 Wolf9466    <https://github.com/OhGodAPet>
- * Copyright 2016      Jay D Dee   <jayddee246@gmail.com>
- * Copyright 2017-2018 XMR-Stak    <https://github.com/fireice-uk>, <https://github.com/psychocrypt>
- * Copyright 2018-2020 SChernykh   <https://github.com/SChernykh>
- * Copyright 2016-2020 XMRig       <https://github.com/xmrig>, <support@xmrig.com>
+ * Copyright (c) 2018-2021 SChernykh   <https://github.com/SChernykh>
+ * Copyright (c) 2016-2021 XMRig       <https://github.com/xmrig>, <support@xmrig.com>
  *
  *   This program is free software: you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -22,7 +16,6 @@
  *   along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-
 #include <mutex>
 #include <string>
 
@@ -36,7 +29,6 @@
 #include "backend/opencl/OclConfig.h"
 #include "backend/opencl/OclLaunchData.h"
 #include "backend/opencl/OclWorker.h"
-#include "backend/opencl/runners/OclAstroBWTRunner.h"
 #include "backend/opencl/runners/tools/OclSharedState.h"
 #include "backend/opencl/wrappers/OclContext.h"
 #include "backend/opencl/wrappers/OclLib.h"
@@ -134,7 +126,7 @@ private:
 class OclBackendPrivate
 {
 public:
-    inline OclBackendPrivate(Controller *controller) :
+    inline explicit OclBackendPrivate(Controller *controller) :
         controller(controller)
     {
         init(controller->config()->cl());
@@ -210,12 +202,6 @@ public:
         Log::print(WHITE_BOLD("|  # | GPU |  BUS ID | INTENSITY | WSIZE | MEMORY | NAME"));
 
         size_t algo_l3 = algo.l3();
-
-#       ifdef XMRIG_ALGO_ASTROBWT
-        if (algo.family() == Algorithm::ASTROBWT) {
-            algo_l3 = OclAstroBWTRunner::BWT_DATA_STRIDE * 17 + 324;
-        }
-#       endif
 
         size_t i = 0;
         for (const auto &data : threads) {
@@ -366,15 +352,20 @@ void xmrig::OclBackend::printHashrate(bool details)
 
     char num[16 * 3] = { 0 };
 
-    const double hashrate_short  = hashrate()->calc(Hashrate::ShortInterval);
-    const double hashrate_medium = hashrate()->calc(Hashrate::MediumInterval);
-    const double hashrate_large  = hashrate()->calc(Hashrate::LargeInterval);
+    auto hashrate_short = hashrate()->calc(Hashrate::ShortInterval);
+    auto hashrate_medium = hashrate()->calc(Hashrate::MediumInterval);
+    auto hashrate_large = hashrate()->calc(Hashrate::LargeInterval);
 
     double scale = 1.0;
     const char* h = " H/s";
 
-    if ((hashrate_short >= 1e6) || (hashrate_medium >= 1e6) || (hashrate_large >= 1e6)) {
+    if ((hashrate_short.second >= 1e6) || (hashrate_medium.second >= 1e6) || (hashrate_large.second >= 1e6)) {
         scale = 1e-6;
+
+        hashrate_short.second  *= scale;
+        hashrate_medium.second *= scale;
+        hashrate_large.second  *= scale;
+
         h = "MH/s";
     }
 
@@ -382,12 +373,16 @@ void xmrig::OclBackend::printHashrate(bool details)
 
     size_t i = 0;
     for (const auto& data : d_ptr->threads) {
-         Log::print("| %8zu | %8" PRId64 " | %8s | %8s | %8s |" CYAN_BOLD(" #%u") YELLOW(" %s") " %s",
+        auto h0 = hashrate()->calc(i, Hashrate::ShortInterval);
+        auto h1 = hashrate()->calc(i, Hashrate::MediumInterval);
+        auto h2 = hashrate()->calc(i, Hashrate::LargeInterval);
+
+        Log::print("| %8zu | %8" PRId64 " | %8s | %8s | %8s |" CYAN_BOLD(" #%u") YELLOW(" %s") " %s",
                     i,
                     data.affinity,
-                    Hashrate::format(hashrate()->calc(i, Hashrate::ShortInterval)  * scale, num,          sizeof num / 3),
-                    Hashrate::format(hashrate()->calc(i, Hashrate::MediumInterval) * scale, num + 16,     sizeof num / 3),
-                    Hashrate::format(hashrate()->calc(i, Hashrate::LargeInterval)  * scale, num + 16 * 2, sizeof num / 3),
+                    Hashrate::format(h0, num, sizeof num / 3),
+                    Hashrate::format(h1, num + 16, sizeof num / 3),
+                    Hashrate::format(h2, num + 16 * 2, sizeof num / 3),
                     data.device.index(),
                     data.device.topology().toString().data(),
                     data.device.printableName().data()
@@ -397,9 +392,9 @@ void xmrig::OclBackend::printHashrate(bool details)
     }
 
     Log::print(WHITE_BOLD_S "|        - |        - | %8s | %8s | %8s |",
-               Hashrate::format(hashrate()->calc(Hashrate::ShortInterval)  * scale, num,          sizeof num / 3),
-               Hashrate::format(hashrate()->calc(Hashrate::MediumInterval) * scale, num + 16,     sizeof num / 3),
-               Hashrate::format(hashrate()->calc(Hashrate::LargeInterval)  * scale, num + 16 * 2, sizeof num / 3)
+               Hashrate::format(hashrate_short , num,          sizeof num / 3),
+               Hashrate::format(hashrate_medium, num + 16,     sizeof num / 3),
+               Hashrate::format(hashrate_large , num + 16 * 2, sizeof num / 3)
                );
 }
 
@@ -485,9 +480,9 @@ void xmrig::OclBackend::stop()
 }
 
 
-void xmrig::OclBackend::tick(uint64_t ticks)
+bool xmrig::OclBackend::tick(uint64_t ticks)
 {
-    d_ptr->workers.tick(ticks);
+    return d_ptr->workers.tick(ticks);
 }
 
 

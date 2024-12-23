@@ -1,6 +1,6 @@
 /* XMRig
- * Copyright 2018-2020 SChernykh   <https://github.com/SChernykh>
- * Copyright 2016-2020 XMRig       <https://github.com/xmrig>, <support@xmrig.com>
+ * Copyright (c) 2018-2021 SChernykh   <https://github.com/SChernykh>
+ * Copyright (c) 2016-2021 XMRig       <https://github.com/xmrig>, <support@xmrig.com>
  *
  *   This program is free software: you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -22,7 +22,6 @@
 
 
 #include <cassert>
-#include <uv.h>
 
 
 namespace xmrig {
@@ -37,11 +36,34 @@ static void fsWriteCallback(uv_fs_t *req)
 }
 
 
-static const char *kNewLine = "\n";
-
-
 } // namespace xmrig
 
+
+xmrig::FileLogWriter::FileLogWriter()
+{
+    init();
+}
+
+xmrig::FileLogWriter::FileLogWriter(const char* fileName)
+{
+    init();
+    open(fileName);
+}
+
+xmrig::FileLogWriter::~FileLogWriter()
+{
+    uv_close(reinterpret_cast<uv_handle_t*>(&m_flushAsync), nullptr);
+
+    uv_mutex_destroy(&m_buffersLock);
+}
+
+void xmrig::FileLogWriter::init()
+{
+    uv_mutex_init(&m_buffersLock);
+
+    uv_async_init(uv_default_loop(), &m_flushAsync, on_flush);
+    m_flushAsync.data = this;
+}
 
 bool xmrig::FileLogWriter::open(const char *fileName)
 {
@@ -50,11 +72,24 @@ bool xmrig::FileLogWriter::open(const char *fileName)
         return false;
     }
 
-    uv_fs_t req;
-    m_file = uv_fs_open(uv_default_loop(), &req, Env::expand(fileName), O_CREAT | O_APPEND | O_WRONLY, 0644, nullptr);
+    uv_fs_t req{};
+    const auto path = Env::expand(fileName);
+    m_file          = uv_fs_open(uv_default_loop(), &req, path, O_CREAT | O_WRONLY, 0644, nullptr);
+
+    if (req.result < 0 || !isOpen()) {
+        uv_fs_req_cleanup(&req);
+        m_file = -1;
+
+        return false;
+    }
+
     uv_fs_req_cleanup(&req);
 
-    return isOpen();
+    uv_fs_stat(uv_default_loop(), &req, path, nullptr);
+    m_pos = req.statbuf.st_size;
+    uv_fs_req_cleanup(&req);
+
+    return true;
 }
 
 
@@ -67,10 +102,12 @@ bool xmrig::FileLogWriter::write(const char *data, size_t size)
     uv_buf_t buf = uv_buf_init(new char[size], size);
     memcpy(buf.base, data, size);
 
-    auto req = new uv_fs_t;
-    req->data = buf.base;
+    uv_mutex_lock(&m_buffersLock);
 
-    uv_fs_write(uv_default_loop(), req, m_file, &buf, 1, -1, fsWriteCallback);
+    m_buffers.emplace_back(buf);
+    uv_async_send(&m_flushAsync);
+
+    uv_mutex_unlock(&m_buffersLock);
 
     return true;
 }
@@ -78,17 +115,38 @@ bool xmrig::FileLogWriter::write(const char *data, size_t size)
 
 bool xmrig::FileLogWriter::writeLine(const char *data, size_t size)
 {
-    uv_buf_t buf[2] = {
-        uv_buf_init(new char[size], size),
-        uv_buf_init(const_cast<char *>(kNewLine), 1)
-    };
+    if (!isOpen()) {
+        return false;
+    }
 
-    memcpy(buf[0].base, data, size);
+    constexpr size_t N = sizeof(m_endl) - 1;
 
-    auto req = new uv_fs_t;
-    req->data = buf[0].base;
+    uv_buf_t buf = uv_buf_init(new char[size + N], size + N);
+    memcpy(buf.base, data, size);
+    memcpy(buf.base + size, m_endl, N);
 
-    uv_fs_write(uv_default_loop(), req, m_file, buf, 2, -1, fsWriteCallback);
+    uv_mutex_lock(&m_buffersLock);
+
+    m_buffers.emplace_back(buf);
+    uv_async_send(&m_flushAsync);
+
+    uv_mutex_unlock(&m_buffersLock);
 
     return true;
+}
+
+void xmrig::FileLogWriter::flush()
+{
+    uv_mutex_lock(&m_buffersLock);
+
+    for (uv_buf_t buf : m_buffers) {
+        uv_fs_t* req = new uv_fs_t;
+        req->data = buf.base;
+
+        uv_fs_write(uv_default_loop(), req, m_file, &buf, 1, m_pos, fsWriteCallback);
+        m_pos += buf.len;
+    }
+    m_buffers.clear();
+
+    uv_mutex_unlock(&m_buffersLock);
 }

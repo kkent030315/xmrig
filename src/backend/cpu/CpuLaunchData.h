@@ -44,12 +44,12 @@ class Miner;
 class CpuLaunchData
 {
 public:
-    CpuLaunchData(const Miner *miner, const Algorithm &algorithm, const CpuConfig &config, const CpuThread &thread);
+    CpuLaunchData(const Miner *miner, const Algorithm &algorithm, const CpuConfig &config, const CpuThread &thread, size_t threads, const std::vector<int64_t>& affinities);
 
     bool isEqual(const CpuLaunchData &other) const;
     CnHash::AlgoVariant av() const;
 
-    inline constexpr static Nonce::Backend backend() { return Nonce::CPU; }
+    inline constexpr static Nonce::Backend backend()            { return Nonce::CPU; }
 
     inline bool operator!=(const CpuLaunchData &other) const    { return !isEqual(other); }
     inline bool operator==(const CpuLaunchData &other) const    { return isEqual(other); }
@@ -58,15 +58,15 @@ public:
 
     const Algorithm algorithm;
     const Assembly assembly;
-    const bool astrobwtAVX2;
     const bool hugePages;
     const bool hwAES;
     const bool yield;
-    const int astrobwtMaxSize;
     const int priority;
     const int64_t affinity;
     const Miner *miner;
+    const size_t threads;
     const uint32_t intensity;
+    const std::vector<int64_t> affinities;
 };
 
 

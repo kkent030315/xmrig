@@ -6,8 +6,8 @@
  * Copyright 2016      Jay D Dee   <jayddee246@gmail.com>
  * Copyright 2017-2018 XMR-Stak    <https://github.com/fireice-uk>, <https://github.com/psychocrypt>
  * Copyright 2018      Lee Clagett <https://github.com/vtnerd>
- * Copyright 2018-2020 SChernykh   <https://github.com/SChernykh>
- * Copyright 2016-2020 XMRig       <https://github.com/xmrig>, <support@xmrig.com>
+ * Copyright 2018-2024 SChernykh   <https://github.com/SChernykh>
+ * Copyright 2016-2024 XMRig       <https://github.com/xmrig>, <support@xmrig.com>
  *
  *   This program is free software: you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -22,7 +22,6 @@
  *   You should have received a copy of the GNU General Public License
  *   along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
-
 
 #include <cstdlib>
 #include <uv.h>
@@ -43,17 +42,13 @@
 
 xmrig::App::App(Process *process)
 {
-    m_controller = new Controller(process);
+    m_controller = std::make_shared<Controller>(process);
 }
 
 
 xmrig::App::~App()
 {
     Cpu::release();
-
-    delete m_signals;
-    delete m_console;
-    delete m_controller;
 }
 
 
@@ -65,12 +60,12 @@ int xmrig::App::exec()
         return 2;
     }
 
-    m_signals = new Signals(this);
-
     int rc = 0;
     if (background(rc)) {
         return rc;
     }
+
+    m_signals = std::make_shared<Signals>(this);
 
     rc = m_controller->init();
     if (rc != 0) {
@@ -78,10 +73,10 @@ int xmrig::App::exec()
     }
 
     if (!m_controller->isBackground()) {
-        m_console = new Console(this);
+        m_console = std::make_shared<Console>(this);
     }
 
-    Summary::print(m_controller);
+    Summary::print(m_controller.get());
 
     if (m_controller->config()->isDryRun()) {
         LOG_NOTICE("%s " WHITE_BOLD("OK"), Tags::config());
@@ -115,32 +110,20 @@ void xmrig::App::onSignal(int signum)
     switch (signum)
     {
     case SIGHUP:
-        LOG_WARN("%s " YELLOW("SIGHUP received, exiting"), Tags::signal());
-        break;
-
     case SIGTERM:
-        LOG_WARN("%s " YELLOW("SIGTERM received, exiting"), Tags::signal());
-        break;
-
     case SIGINT:
-        LOG_WARN("%s " YELLOW("SIGINT received, exiting"), Tags::signal());
-        break;
+        return close();
 
     default:
-        return;
+        break;
     }
-
-    close();
 }
 
 
 void xmrig::App::close()
 {
-    m_signals->stop();
-
-    if (m_console) {
-        m_console->stop();
-    }
+    m_signals.reset();
+    m_console.reset();
 
     m_controller->stop();
 

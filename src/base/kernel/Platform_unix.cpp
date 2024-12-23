@@ -1,11 +1,6 @@
 /* XMRig
- * Copyright 2010      Jeff Garzik <jgarzik@pobox.com>
- * Copyright 2012-2014 pooler      <pooler@litecoinpool.org>
- * Copyright 2014      Lucas Jones <https://github.com/lucasjones>
- * Copyright 2014-2016 Wolf9466    <https://github.com/OhGodAPet>
- * Copyright 2016      Jay D Dee   <jayddee246@gmail.com>
- * Copyright 2018-2020 SChernykh   <https://github.com/SChernykh>
- * Copyright 2016-2020 XMRig       <https://github.com/xmrig>, <support@xmrig.com>
+ * Copyright (c) 2018-2021 SChernykh   <https://github.com/SChernykh>
+ * Copyright (c) 2016-2021 XMRig       <https://github.com/xmrig>, <support@xmrig.com>
  *
  *   This program is free software: you can redistribute it and/or modify
  *   it under the terms of the GNU General Public License as published by
@@ -21,10 +16,12 @@
  *   along with this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
-#ifdef __FreeBSD__
+#ifdef XMRIG_OS_FREEBSD
 #   include <sys/types.h>
 #   include <sys/param.h>
-#   include <sys/cpuset.h>
+#   ifndef __DragonFly__
+#       include <sys/cpuset.h>
+#   endif
 #   include <pthread_np.h>
 #endif
 
@@ -39,15 +36,11 @@
 #include <uv.h>
 #include <thread>
 #include <fstream>
+#include <limits>
 
 
 #include "base/kernel/Platform.h"
 #include "version.h"
-
-
-#ifdef __FreeBSD__
-typedef cpuset_t cpu_set_t;
-#endif
 
 
 char *xmrig::Platform::createUserAgent()
@@ -78,6 +71,19 @@ char *xmrig::Platform::createUserAgent()
 
 
 #ifndef XMRIG_FEATURE_HWLOC
+#ifdef __DragonFly__
+
+bool xmrig::Platform::setThreadAffinity(uint64_t cpu_id)
+{
+    return true;
+}
+
+#else
+
+#ifdef XMRIG_OS_FREEBSD
+typedef cpuset_t cpu_set_t;
+#endif
+
 bool xmrig::Platform::setThreadAffinity(uint64_t cpu_id)
 {
     cpu_set_t mn;
@@ -93,7 +99,9 @@ bool xmrig::Platform::setThreadAffinity(uint64_t cpu_id)
     std::this_thread::sleep_for(std::chrono::milliseconds(1));
     return result;
 }
-#endif
+
+#endif // __DragonFly__
+#endif // XMRIG_FEATURE_HWLOC
 
 
 void xmrig::Platform::setProcessPriority(int)
@@ -162,4 +170,10 @@ bool xmrig::Platform::isOnBatteryPower()
         }
     }
     return false;
+}
+
+
+uint64_t xmrig::Platform::idleTime()
+{
+    return std::numeric_limits<uint64_t>::max();
 }
